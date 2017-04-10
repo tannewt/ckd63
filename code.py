@@ -1,10 +1,12 @@
 import neopixel
-import nativeio
+import digitalio
 import board
 import time
 import usb_hid
 
 import adafruit_hid.keyboard as kbd
+
+FUNCTION_KEY = 39
 
 # Setup keymapping for the CKD63
 mapping = bytearray(80)
@@ -81,21 +83,38 @@ mapping[74] = kbd.DOWN_ARROW
 mapping[75] = kbd.LEFT_ARROW
 mapping[76] = kbd.RIGHT_GUI
 
+function = {}
+function[kbd.ESCAPE] = kbd.GRAVE_ACCENT
+
+status_color = {
+    True: {
+        0x0: (0, 0, 0x20), # none (just function)
+        0x1: (0x20, 0, 0), # control
+        0x2: (0, 0x20, 0), # shift
+        0x3: (0x20, 0x20, 0) # shift + control
+    },
+    False: {
+        0x1: (0x0a, 0, 0), # control
+        0x2: (0, 0x0a, 0), #shift
+        0x3: (0x0a, 0x0a, 0), # shift + control
+        0x8: (0x0a, 0, 0x0a) # super
+    }
+}
 
 pixel = neopixel.NeoPixel(board.A2, 1)
 pixel[0] = (0x0, 0x00, 0x0a)
 pixel.write()
 
-col_data = nativeio.DigitalInOut(board.D13)
+col_data = digitalio.DigitalInOut(board.D13)
 col_data.switch_to_output()
 
-col_clk = nativeio.DigitalInOut(board.D12)
+col_clk = digitalio.DigitalInOut(board.D12)
 col_clk.switch_to_output()
 
-rows = [nativeio.DigitalInOut(x) for x in [board.D5, board.D6, board.D9, board.D10, board.D11]]
+rows = [digitalio.DigitalInOut(x) for x in [board.D5, board.D6, board.D9, board.D10, board.D11]]
 
 for row in rows:
-    row.switch_to_input(pull=nativeio.DigitalInOut.Pull.DOWN)
+    row.switch_to_input(pull=digitalio.DigitalInOut.Pull.DOWN)
 
 keyboard = usb_hid.devices[1]
 report = bytearray(8)
@@ -108,6 +127,7 @@ while True:
     total_pressed = 0
     report[0] = 0
     pixel[0] = (0x0, 0x00, 0x0a)
+    function_pressed = False
     for col in range(16):
         col_clk.value = False
         col_clk.value = True
@@ -115,21 +135,27 @@ while True:
             key = i * 16 + col
             if row.value:
                 key_code = mapping[key]
-                if key_code == 0:
+                function_pressed = function_pressed or key == FUNCTION_KEY
+                if key != FUNCTION_KEY and key_code == 0:
                     print(key)
                 elif total_pressed < 6:
                     if key_code >= 0xe0:
                         report[0] |= 1 << (key_code - 0xE0)
-                        if key_code == kbd.LEFT_SHIFT:
-                            pixel[0] = (0x0, 0x0a, 0x00)
-                        elif key_code == kbd.LEFT_CONTROL:
-                            pixel[0] = (0x0a, 0x0, 0x0)
                     else:
                         report[2 + total_pressed] = mapping[key]
                         total_pressed += 1
         if total_pressed == 6:
             break
+    if function_pressed:
+        for i in range(2, 2 + total_pressed):
+            key_code = report[i]
+            if key_code in function:
+                report[i] = function[key_code]
+
     for i in range(2 + total_pressed, 8):
         report[i] = 0
     keyboard.send_report(report)
+    pixel[0] = (0x00, 0x00, 0x0a)
+    if report[0] in status_color[function_pressed]:
+        pixel[0] = status_color[function_pressed][report[0]]
     pixel.write()
